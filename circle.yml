@@ -1,70 +1,54 @@
-# This circle.yml file does some basic testing on CI for the boilerplate itself.
-# When using the boilerplate this file will not be used, proj_circle.yml is used
-# instead.
-
-machine:
+machine:  # remeber to update those!
   python:
     version: 3.6.0
   node:
     version: 6.1.0
   environment:
+    # makes default virtualenv be ignored by pipenv avoiding dependencies conflict
     PIPENV_IGNORE_VIRTUALENVS: True
-    PIPENV_DONT_LOAD_ENV: 0
 
 dependencies:
+  pre:
+    # this updates git-lfs to make pre-commit large files check hook work properly
+    # more details in https://github.com/pre-commit/pre-commit-hooks/issues/252
+    - curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+    - sudo apt-get install git-lfs --upgrade
   post:
-    - pip install "django<2"
-    - django-admin startproject testproject --extension py,yml,json --name Procfile,README.md --template=.
     - pip install requests pipenv --upgrade
+    - pipenv install --dev
 
 test:
   override:
-    - pipenv install --dev:
-        pwd: testproject
-    # The above command would have wrongly installed django 2.x
-    # the follwing is a workaround for https://github.com/pypa/pipenv/issues/1220
-    - pipenv install:
-        pwd: testproject
-    - npm update --save:
-        pwd: testproject
-    - npm update --save-dev:
-        pwd: testproject
-    # hotfix for #133
-    - |
-      sed -i 's/"bootstrap-loader": "^2.1.0"/"bootstrap-loader": "2.1.0"/g' testproject/package.json
-    - npm install:
-        pwd: testproject
-    # npm ls will error on dependencies errors
-    - npm ls:
-        pwd: testproject
-    - cp testproject/testproject/settings/local.py.example testproject/testproject/settings/local.py
-    - echo 'DJANGO_SETTINGS_MODULE="testproject.settings.local"' > testproject/.env
-    - pipenv run python manage.py makemigrations:
-        pwd: testproject
-    - pipenv run python manage.py migrate:
-        pwd: testproject
-    - pipenv run python manage.py test:
-        pwd: testproject
-    - pipenv run prospector:
-        pwd: testproject
-    - pipenv run python manage.py has_missing_migrations:
-        pwd: testproject
-    - SECRET_KEY="$(python -c "import uuid; print(uuid.uuid4().hex + uuid.uuid4().hex)")" SENDGRID_USERNAME='foo' SENDGRID_PASSWORD='password' DJANGO_SETTINGS_MODULE='testproject.settings.production' DATABASE_URL='sqlite:///' ALLOWED_HOSTS='.example.org' REDIS_URL='redis://' pipenv run python manage.py check --deploy --fail-level WARNING:
-        pwd: testproject
-    - npm run test:
-        pwd: testproject
-    - npm run lint:
-        pwd: testproject
-    - npm run build:
-        pwd: testproject
+    - npm run build
+    - npm run lint
+    # style check
+    - pipenv run prospector
+    # security checks
+    - pipenv run bandit -r .
+    - pipenv check
+    # imports check
+    - pipenv run isort **/*.py --check-only
+    # pre-commit additional checks
+    - SKIP=prospector,isort,eslint,missing-migrations pipenv run pre-commit run --all-files
+    - >-
+      DJANGO_SETTINGS_MODULE={{project_name}}.settings.local_base
+      pipenv run python manage.py has_missing_migrations --ignore authtools;
+    - >-
+      DJANGO_SETTINGS_MODULE={{project_name}}.settings.production
+      SECRET_KEY=$(python -c 'import uuid; print(uuid.uuid4().hex + uuid.uuid4().hex)')
+      DATABASE_URL='sqlite:///'
+      ALLOWED_HOSTS='.example.org'
+      SENDGRID_USERNAME='test'
+      SENDGRID_PASSWORD='test'
+      REDIS_URL='redis://'
+      pipenv run python manage.py check --deploy
+    - pipenv run coverage run manage.py test
+    - npm run test
+  post:
+    - pipenv run coverage html -d $CIRCLE_ARTIFACTS
 
-deployment:
-  release:
-    branch: master
-    commands:
-      - mv proj_circle.yml circle.yml
-      - git checkout -b boilerplate-release
-      - git add circle.yml
-      - git rm proj_circle.yml
-      - GIT_COMMITTER_NAME="Vinta Software" GIT_COMMITTER_EMAIL="contact@vinta.com.br" git commit -m "Replacing circle.yml" --author "Vinta Software <contact@vinta.com.br>"
-      - git push origin boilerplate-release --force
+# This is necessary for the boilerplate's CI. You can remove these lines
+general:
+  branches:
+    ignore:
+      - boilerplate-release
